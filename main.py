@@ -208,4 +208,74 @@ async def chatcontext_clear(guild):
 
 
 
+@bot.command(name="question", description="Ask a question and get an answer.")
+@commands.cooldown(1, 60, commands.BucketType.guild)
+async def question(ctx: discord.Message, *, question):
+    try:
+        question = question.lower()
+        author = ctx.author.display_name
+        chatcontext = await get_guild_x(ctx.guild.id, "chatcontext")
+
+        if not chatcontext:
+            chatcontext = []
+
+        prmpt = "You are a helpful chatbot."
+        messages = [{"role": "system", "content": prmpt}]
+
+        if len(chatcontext) > 0:
+            if len(chatcontext) > 6:
+                if len(chatcontext) >= 500:
+                    await chatcontext_pop(ctx.guild.id, 500)
+                # we keep 500 in db but only use 6
+                chatcontext = chatcontext[len(chatcontext) - 6 : len(chatcontext)]
+            for mesg in chatcontext:
+                mesg = mesg.replace('\\"', '"').replace("\'", "'")
+                mesg = mesg.split(":", 1)
+
+                if mesg[0].lower == 'bot' or mesg[0].lower == 'assistant':
+                    mesg[0] = "assistant"
+                else:
+                    mesg[0] = "user"
+                messages.append({"role": mesg[0], "content": mesg[1]})
+
+        elif not len(chatcontext) > 0:
+            messages.append({"role": "user", "content": question})
+
+        response = await openai.ChatCompletion.acreate(
+            model="gpt-4",
+            messages=messages,
+            user=str(ctx.author.id),
+        )
+        await asyncio.sleep(0.1)
+
+        if response["choices"][0]["finish_reason"] in ["stop", "length"]:
+            activity = discord.Activity(name=f"{author}", type=discord.ActivityType.listening)
+            await bot.change_presence(status=discord.Status.online, activity=activity)
+
+            message_content = response["choices"][0]["message"]["content"].strip()
+            async with ctx.channel.typing():
+                for i in range(0, len(message_content), 2000):
+                    if i == 0:
+                        await ctx.reply(message_content[i : i + 2000])
+                    else:
+                        await ctx.channel.send(message_content[i : i + 2000])
+
+            await chatcontext_append(ctx.guild.id, f'{author}: {question}')
+            await chatcontext_append(ctx.guild.id, f'bot: {str(response["choices"][0]["message"]["content"].strip())}')
+            print(f'[!question] {ctx.guild.name} | {author}: {question}')
+            print(f'{bot.user}: {str(response["choices"][0]["message"]["content"].strip())}')
+
+        else:
+            print(f'[!question] {ctx.guild.name} | {author}: {question}')
+            print(f'bot: ERROR')
+
+    except Exception as e:
+        await ctx.reply("Error")
+        print(f"!question THREW: {e}")
+
+@question.error
+async def question_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.reply(f"Questioning too fast! {round(error.retry_after, 2)} seconds left")
+
 bot.run(TOKEN)
